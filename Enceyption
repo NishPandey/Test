@@ -1,0 +1,88 @@
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.Base64;
+
+public class FileEncryptor {
+
+    public static void main(String[] args) throws Exception {
+        String pubCertPath = "/lotus/ds1/home/dsadm/ds_cert1/public.pem";
+        String filePath = "/lotus/ds5/ETL";
+        String dataFile = "auto_pap1.csv";
+
+        Path keyFilePath = Paths.get(filePath, dataFile + ".key");
+        Path ivFilePath = Paths.get(filePath, dataFile + ".iv");
+        Path inputFile = Paths.get(filePath, dataFile);
+        Path encryptedFile = Paths.get(filePath, dataFile + ".enc");
+
+        // 1. Generate AES key and IV
+        SecretKey aesKey = generateAESKey(256);
+        byte[] iv = generateIV(16);
+
+        Files.write(keyFilePath, aesKey.getEncoded());
+        Files.write(ivFilePath, iv);
+
+        // 2. Encrypt the data file using AES
+        encryptFileWithAES(inputFile.toFile(), encryptedFile.toFile(), aesKey.getEncoded(), iv);
+
+        // 3. Encrypt key and IV using RSA public key
+        PublicKey publicKey = loadRSAPublicKey(pubCertPath);
+
+        byte[] encryptedKey = rsaEncrypt(publicKey, aesKey.getEncoded());
+        byte[] encryptedIV = rsaEncrypt(publicKey, iv);
+
+        Files.write(Paths.get(filePath, keyFilePath.getFileName() + ".enc"), encryptedKey);
+        Files.write(Paths.get(filePath, ivFilePath.getFileName() + ".enc"), encryptedIV);
+
+        System.out.println("Encryption complete.");
+    }
+
+    public static SecretKey generateAESKey(int bits) throws Exception {
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(bits);
+        return keyGen.generateKey();
+    }
+
+    public static byte[] generateIV(int size) {
+        byte[] iv = new byte[size];
+        new SecureRandom().nextBytes(iv);
+        return iv;
+    }
+
+    public static void encryptFileWithAES(File inputFile, File outputFile, byte[] key, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec secretKeySpec = new SecretKeySpec(key, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(iv);
+        cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, ivSpec);
+
+        try (FileInputStream fis = new FileInputStream(inputFile);
+             CipherOutputStream cos = new CipherOutputStream(new FileOutputStream(outputFile), cipher)) {
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = fis.read(buffer)) != -1) {
+                cos.write(buffer, 0, read);
+            }
+        }
+    }
+
+    public static PublicKey loadRSAPublicKey(String filename) throws Exception {
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        try (FileInputStream fis = new FileInputStream(filename)) {
+            X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
+            return cert.getPublicKey();
+        }
+    }
+
+    public static byte[] rsaEncrypt(PublicKey publicKey, byte[] data) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding"); // OpenSSL default
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        return cipher.doFinal(data);
+    }
+}
