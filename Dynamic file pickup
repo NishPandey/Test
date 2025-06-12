@@ -3,13 +3,19 @@ package com.ibm.sbi.lotus.cloudant.loginandreg.core;
 import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+
+import com.ibm.ISecurityUtilityImpl.KeyFile;
+
 import java.io.*;
 import java.nio.file.*;
 import java.security.*;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
+import java.util.Base64;
 
-public class FileEncryptDemo {
+public class DynamicFilePickup {
 
     public static void main(String[] args) throws Exception {
         // Get the first .csv file from Downloads
@@ -29,25 +35,30 @@ public class FileEncryptDemo {
         File encryptedFile = new File(inputFile.getAbsolutePath() + ".enc");
 
         // Generate AES key and IV
-        SecretKey aesKey = generateAESKey(256);
-        byte[] iv = generateIV(16);
+        SecretKey aesSecretKey = generateaesSecretKey(256);
+        // iv = aes half
+        byte[] aesKey = aesSecretKey.getEncoded();
+        byte[] iv = Arrays.copyOfRange(aesKey, 0, aesKey.length/2);
+		
+        //byte[] iv = generateIV(16);
 
-        // Write raw key and IV to disk (optional - for debug)
-        Path keyFilePath = Paths.get(inputFile.getAbsolutePath() + ".key");
-        Path ivFilePath = Paths.get(inputFile.getAbsolutePath() + ".iv");
-        Files.write(keyFilePath, aesKey.getEncoded());
-        Files.write(ivFilePath, iv);
+		/*
+		 * // Write raw key and IV to disk (optional - for debug) Path keyFilePath =
+		 * Paths.get(inputFile.getAbsolutePath() + ".key"); Path ivFilePath =
+		 * Paths.get(inputFile.getAbsolutePath() + ".iv"); Files.write(keyFilePath,
+		 * aesSecretKey.getEncoded()); Files.write(ivFilePath, iv);
+		 */
 
         // Encrypt file with AES
-        encryptFileWithAES(inputFile, encryptedFile, aesKey.getEncoded(), iv);
+        encryptFileWithAES(inputFile, encryptedFile, aesSecretKey.getEncoded(), iv);
         System.out.println("AES Encrypted file: " + encryptedFile);
 
         // Encrypt AES key and IV with RSA public key
-        byte[] encryptedKey = rsaEncrypt(publicKey, aesKey.getEncoded());
+        byte[] encryptedKey = rsaEncrypt(publicKey, aesSecretKey.getEncoded());
         byte[] encryptedIV = rsaEncrypt(publicKey, iv);
 
         Files.write(Paths.get(inputFile.getAbsolutePath() + ".key.enc"), encryptedKey);
-        Files.write(Paths.get(inputFile.getAbsolutePath() + ".iv.enc"), encryptedIV);
+       // Files.write(Paths.get(inputFile.getAbsolutePath() + ".iv.enc"), encryptedIV);
 
         System.out.println("Encryption complete.");
     }
@@ -83,23 +94,25 @@ public class FileEncryptDemo {
         return cipher.doFinal(data);
     }
 
-    public static PublicKey loadRSAPublicKey(String filename) throws Exception {
-        CertificateFactory cf = CertificateFactory.getInstance("X.509");
-        try (FileInputStream fis = new FileInputStream(filename)) {
-            X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
-            return cert.getPublicKey();
-        }
+    public static <x509EncodedKeySpec> PublicKey loadRSAPublicKey(String filename) throws Exception {
+    	String pem = new String(Files.readAllBytes(Paths.get(filename)));
+    	pem = pem.replace("-----BEGIN PUBLIC KEY-----","").replace("-----END PUBLIC KEY-----", "").replaceAll("\\s+", "");
+        
+    	byte[] decoded = Base64.getDecoder().decode(pem);
+    	X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
+    	KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+    	return keyFactory.generatePublic(spec);
+    	
     }
 
-    public static SecretKey generateAESKey(int bits) throws NoSuchAlgorithmException {
+    public static SecretKey generateaesSecretKey(int bits) throws NoSuchAlgorithmException {
         KeyGenerator keyGen = KeyGenerator.getInstance("AES");
         keyGen.init(bits);
         return keyGen.generateKey();
     }
 
-    public static byte[] generateIV(int length) {
-        byte[] iv = new byte[length];
-        new SecureRandom().nextBytes(iv);
-        return iv;
-    }
+	/*
+	 * public static byte[] generateIV(int length) { byte[] iv = new byte[length];
+	 * new SecureRandom().nextBytes(iv); return iv; }
+	 */
 }
