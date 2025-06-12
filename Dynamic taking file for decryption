@@ -1,0 +1,81 @@
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.file.*;
+import java.security.*;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
+
+public class DynamicDecryptor {
+
+    public static void main(String[] args) throws Exception {
+        // ====== Input ======
+        if (args.length < 2) {
+            System.err.println("Usage: java DynamicDecryptor <encrypted_file_path> <private_key_path>");
+            return;
+        }
+
+        String encryptedFilePath = args[0]; // e.g., /path/to/your/autopapl.csv.enc
+        String privateKeyPath = args[1];    // e.g., /path/to/private.pem
+
+        Path encDataFile = Paths.get(encryptedFilePath);
+        String fileName = encDataFile.getFileName().toString().replace(".enc", "");
+        Path directory = encDataFile.getParent();
+
+        Path keyEncFile = directory.resolve(fileName + ".key.enc");
+        Path keyDecFile = directory.resolve(fileName + ".key.dec");
+        Path dataDecFile = directory.resolve(fileName + ".dec");
+
+        // ====== Step 1: Decrypt AES key using RSA private key ======
+        PrivateKey privateKey = loadPrivateKey(privateKeyPath);
+        byte[] encryptedKey = Files.readAllBytes(keyEncFile);
+        byte[] decryptedKey = decryptRSA(privateKey, encryptedKey);
+        Files.write(keyDecFile, decryptedKey);
+
+        System.out.println("✅ Key decrypted: " + keyDecFile);
+
+        // ====== Step 2: Extract AES Key + IV ======
+        byte[] keyBytes = decryptedKey;
+        if (keyBytes.length < 32) {
+            throw new IllegalArgumentException("Decrypted key must be at least 32 bytes for AES-256");
+        }
+
+        byte[] aesKey = new byte[32];
+        byte[] iv = new byte[16]; // IV = first 16 bytes of key
+        System.arraycopy(keyBytes, 0, aesKey, 0, 32);
+        System.arraycopy(keyBytes, 0, iv, 0, 16);
+
+        // ====== Step 3: Decrypt AES data file ======
+        byte[] encryptedData = Files.readAllBytes(encDataFile);
+        byte[] decryptedData = decryptAES(encryptedData, aesKey, iv);
+        Files.write(dataDecFile, decryptedData);
+
+        System.out.println("✅ Data decrypted: " + dataDecFile);
+    }
+
+    public static PrivateKey loadPrivateKey(String filePath) throws Exception {
+        String key = new String(Files.readAllBytes(Paths.get(filePath)))
+                .replaceAll("-----BEGIN (.*)-----", "")
+                .replaceAll("-----END (.*)-----", "")
+                .replaceAll("\\s", "");
+
+        byte[] keyBytes = Base64.getDecoder().decode(key);
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePrivate(spec);
+    }
+
+    public static byte[] decryptRSA(PrivateKey privateKey, byte[] encryptedData) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.DECRYPT_MODE, privateKey);
+        return cipher.doFinal(encryptedData);
+    }
+
+    public static byte[] decryptAES(byte[] encryptedData, byte[] key, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(iv);
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
+        return cipher.doFinal(encryptedData);
+    }
+}
