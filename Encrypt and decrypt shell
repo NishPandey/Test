@@ -430,3 +430,102 @@ public class PlainJavaFileDecryptor {
         return cipher.doFinal(encryptedKey);
     }
 }
+
+
+
+
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Scanner;
+
+public class DecryptFileWithUserInput {
+
+    public static void main(String[] args) {
+        try (Scanner scanner = new Scanner(System.in)) {
+
+            // Get encrypted data file
+            String encryptedFilePath = prompt(scanner, "Enter encrypted file path (.enc): ");
+            validateFileExists(encryptedFilePath);
+
+            // Get encrypted AES key file
+            String encryptedKeyPath = prompt(scanner, "Enter encrypted key file path (.key.enc): ");
+            validateFileExists(encryptedKeyPath);
+
+            // Get private key file
+            String privateKeyPath = prompt(scanner, "Enter private key file path (.pem): ");
+            validateFileExists(privateKeyPath);
+
+            String decryptedFilePath = encryptedFilePath.replace(".enc", ".dec");
+
+            // Read and decrypt AES key
+            byte[] encryptedKey = Files.readAllBytes(Paths.get(encryptedKeyPath));
+            PrivateKey privateKey = loadPrivateKeyFromPEM(privateKeyPath);
+            byte[] aesKey = decryptAESKeyWithRSA(encryptedKey, privateKey);
+
+            // Extract IV (first 16 bytes)
+            byte[] iv = Arrays.copyOfRange(aesKey, 0, 16);
+
+            // Decrypt file using AES key
+            decryptFile(encryptedFilePath, decryptedFilePath, aesKey, iv);
+
+            System.out.println("✅ File decrypted successfully: " + decryptedFilePath);
+        } catch (Exception e) {
+            System.err.println("❌ Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private static String prompt(Scanner scanner, String message) {
+        System.out.print(message);
+        return scanner.nextLine().trim().replace("\"", "");
+    }
+
+    private static void validateFileExists(String path) throws IOException {
+        if (!Files.exists(Paths.get(path))) {
+            throw new FileNotFoundException("File not found: " + path);
+        }
+    }
+
+    private static PrivateKey loadPrivateKeyFromPEM(String pemFilePath) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(pemFilePath)));
+        String cleanPem = pem
+                .replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] decoded = Base64.getDecoder().decode(cleanPem);
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decoded);
+        return KeyFactory.getInstance("RSA").generatePrivate(keySpec);
+    }
+
+    private static byte[] decryptAESKeyWithRSA(byte[] encryptedKey, PrivateKey privateKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.DECRYPT_MODE, privateKey);
+        return cipher.doFinal(encryptedKey);
+    }
+
+    private static void decryptFile(String inputPath, String outputPath, byte[] aesKey, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(iv);
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
+
+        try (FileInputStream fis = new FileInputStream(inputPath);
+             CipherInputStream cis = new CipherInputStream(fis, cipher);
+             FileOutputStream fos = new FileOutputStream(outputPath)) {
+
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = cis.read(buffer)) != -1) {
+                fos.write(buffer, 0, bytesRead);
+            }
+        }
+    }
+}
