@@ -1,0 +1,199 @@
+import javax.crypto.*;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.spec.*;
+import java.util.Base64;
+import java.util.Scanner;
+
+public class FileEncryptDecrypt {
+
+    public static void main(String[] args) throws Exception {
+        Scanner scanner = new Scanner(System.in);
+
+        System.out.print("Enter file path: ");
+        String filePath = scanner.nextLine();
+
+        System.out.print("Enter public key path: ");
+        String pubKeyPath = scanner.nextLine();
+
+        System.out.print("Enter private key path: ");
+        String privKeyPath = scanner.nextLine();
+
+        System.out.print("Do you want to encrypt or decrypt? (E/D): ");
+        String choice = scanner.nextLine();
+
+        if (choice.equalsIgnoreCase("E")) {
+            encryptFile(filePath, pubKeyPath);
+        } else if (choice.equalsIgnoreCase("D")) {
+            decryptFile(filePath + ".enc", filePath + ".key", privKeyPath);
+        } else {
+            System.out.println("Invalid choice!");
+        }
+    }
+
+    public static void encryptFile(String inputFile, String publicKeyPath) throws Exception {
+        PublicKey publicKey = loadPublicKey(publicKeyPath);
+
+        // Generate AES key
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(128); // AES-128
+        SecretKey aesKey = keyGen.generateKey();
+
+        // Read file data
+        byte[] fileData = Files.readAllBytes(Paths.get(inputFile));
+
+        // Encrypt file using AES key
+        Cipher aesCipher = Cipher.getInstance("AES");
+        aesCipher.init(Cipher.ENCRYPT_MODE, aesKey);
+        byte[] encryptedFileData = aesCipher.doFinal(fileData);
+
+        // Encrypt AES key using RSA public key
+        Cipher rsaCipher = Cipher.getInstance("RSA");
+        rsaCipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        byte[] encryptedAesKey = rsaCipher.doFinal(aesKey.getEncoded());
+
+        // Save encrypted file
+        Files.write(Paths.get(inputFile + ".enc"), encryptedFileData);
+        Files.write(Paths.get(inputFile + ".key"), encryptedAesKey);
+
+        System.out.println("File encrypted successfully.");
+    }
+
+    public static void decryptFile(String encryptedFile, String encryptedKeyFile, String privateKeyPath) throws Exception {
+        PrivateKey privateKey = loadPrivateKey(privateKeyPath);
+
+        // Read encrypted AES key
+        byte[] encryptedAesKey = Files.readAllBytes(Paths.get(encryptedKeyFile));
+
+        // Decrypt AES key with RSA private key
+        Cipher rsaCipher = Cipher.getInstance("RSA");
+        rsaCipher.init(Cipher.DECRYPT_MODE, privateKey);
+        byte[] aesKeyBytes = rsaCipher.doFinal(encryptedAesKey);
+
+        SecretKeySpec aesKey = new SecretKeySpec(aesKeyBytes, "AES");
+
+        // Read encrypted file data
+        byte[] encryptedFileData = Files.readAllBytes(Paths.get(encryptedFile));
+
+        // Decrypt file data using AES key
+        Cipher aesCipher = Cipher.getInstance("AES");
+        aesCipher.init(Cipher.DECRYPT_MODE, aesKey);
+        byte[] decryptedFileData = aesCipher.doFinal(encryptedFileData);
+
+        // Save decrypted file
+        String outputPath = encryptedFile.replace(".enc", "_decrypted");
+        Files.write(Paths.get(outputPath), decryptedFileData);
+
+        System.out.println("File decrypted successfully. Output: " + outputPath);
+    }
+
+    private static PublicKey loadPublicKey(String filename) throws Exception {
+        byte[] keyBytes = Files.readAllBytes(Paths.get(filename));
+        keyBytes = stripPemHeaders(keyBytes);
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(keyBytes);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        return keyFactory.generatePublic(spec);
+    }
+
+    private static PrivateKey loadPrivateKey(String filename) throws Exception {
+        byte[] keyBytes = Files.readAllBytes(Paths.get(filename));
+        keyBytes = stripPemHeaders(keyBytes);
+        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        return keyFactory.generatePrivate(spec);
+    }
+
+    private static byte[] stripPemHeaders(byte[] pemBytes) {
+        String pem = new String(pemBytes);
+        pem = pem.replace("-----BEGIN PUBLIC KEY-----", "")
+                 .replace("-----END PUBLIC KEY-----", "")
+                 .replace("-----BEGIN PRIVATE KEY-----", "")
+                 .replace("-----END PRIVATE KEY-----", "")
+                 .replaceAll("\\s+", "");
+        return Base64.getDecoder().decode(pem);
+    }
+}
+
+
+
+
+
+
+
+modified enc--
+
+public static void encryptFile(String inputFile, String publicKeyPath) throws Exception {
+    PublicKey publicKey = loadPublicKey(publicKeyPath);
+
+    // Generate AES key
+    KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+    keyGen.init(128);
+    SecretKey aesKey = keyGen.generateKey();
+    byte[] aesKeyBytes = aesKey.getEncoded();
+
+    // Generate IV = half of AES key length (8 bytes)
+    byte[] ivBytes = new byte[aesKeyBytes.length / 2];
+    SecureRandom random = new SecureRandom();
+    random.nextBytes(ivBytes);
+    IvParameterSpec ivSpec = new IvParameterSpec(ivBytes);
+
+    // Read file data
+    byte[] fileData = Files.readAllBytes(Paths.get(inputFile));
+
+    // Encrypt file using AES/CBC/PKCS5Padding
+    Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+    aesCipher.init(Cipher.ENCRYPT_MODE, aesKey, ivSpec);
+    byte[] encryptedFileData = aesCipher.doFinal(fileData);
+
+    // Encrypt AES key using RSA public key
+    Cipher rsaCipher = Cipher.getInstance("RSA");
+    rsaCipher.init(Cipher.ENCRYPT_MODE, publicKey);
+    byte[] encryptedAesKey = rsaCipher.doFinal(aesKeyBytes);
+
+    // Save encrypted file and IV
+    Files.write(Paths.get(inputFile + ".enc"), encryptedFileData);
+    Files.write(Paths.get(inputFile + ".key"), encryptedAesKey);
+    Files.write(Paths.get(inputFile + ".iv"), ivBytes);  // Save IV separately
+
+    System.out.println("File encrypted successfully.");
+}
+
+
+
+
+modified dec---
+
+
+public static void decryptFile(String encryptedFile, String encryptedKeyFile, String privateKeyPath) throws Exception {
+    PrivateKey privateKey = loadPrivateKey(privateKeyPath);
+
+    // Read encrypted AES key
+    byte[] encryptedAesKey = Files.readAllBytes(Paths.get(encryptedKeyFile));
+
+    // Decrypt AES key using RSA private key
+    Cipher rsaCipher = Cipher.getInstance("RSA");
+    rsaCipher.init(Cipher.DECRYPT_MODE, privateKey);
+    byte[] aesKeyBytes = rsaCipher.doFinal(encryptedAesKey);
+    SecretKeySpec aesKey = new SecretKeySpec(aesKeyBytes, "AES");
+
+    // Read IV
+    byte[] ivBytes = Files.readAllBytes(Paths.get(encryptedFile.replace(".enc", ".iv")));
+    IvParameterSpec ivSpec = new IvParameterSpec(ivBytes);
+
+    // Read encrypted file data
+    byte[] encryptedFileData = Files.readAllBytes(Paths.get(encryptedFile));
+
+    // Decrypt file using AES/CBC/PKCS5Padding
+    Cipher aesCipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+    aesCipher.init(Cipher.DECRYPT_MODE, aesKey, ivSpec);
+    byte[] decryptedFileData = aesCipher.doFinal(encryptedFileData);
+
+    // Save decrypted file
+    String outputPath = encryptedFile.replace(".enc", "_decrypted");
+    Files.write(Paths.get(outputPath), decryptedFileData);
+
+    System.out.println("File decrypted successfully. Output: " + outputPath);
+}
+
