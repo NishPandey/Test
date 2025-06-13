@@ -1,0 +1,162 @@
+import javax.crypto.*;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.cert.*;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
+
+public class FileEncryptor {
+
+    public static void main(String[] args) throws Exception {
+        String filePath = "/lotus/ds5/ETL/";
+        String dataFile = "auto_papl.csv";
+        String pubCertPath = "/lotus/ds1/home/dsadm/ds_cert1/public.pem";
+
+        // Step 1: Generate 32-byte AES key
+        byte[] aesKey = new byte[32];
+        SecureRandom secureRandom = new SecureRandom();
+        secureRandom.nextBytes(aesKey);
+
+        // Step 2: IV = first 16 bytes of key
+        byte[] ivBytes = new byte[16];
+        System.arraycopy(aesKey, 0, ivBytes, 0, 16);
+
+        // Step 3: Encrypt file using AES-256-CBC
+        encryptFileAES(filePath + dataFile, filePath + dataFile + ".enc", aesKey, ivBytes);
+
+        // Step 4: Encrypt AES key using RSA public certificate
+        PublicKey publicKey = loadPublicKeyFromPEM(pubCertPath);
+        byte[] encryptedKey = encryptRSA(aesKey, publicKey);
+
+        Files.write(Paths.get(filePath + dataFile + ".key.enc"), encryptedKey);
+    }
+
+    private static void encryptFileAES(String inputFile, String outputFile, byte[] key, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(iv);
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey, ivSpec);
+
+        try (FileInputStream fis = new FileInputStream(inputFile);
+             FileOutputStream fos = new FileOutputStream(outputFile);
+             CipherOutputStream cos = new CipherOutputStream(fos, cipher)) {
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                cos.write(buffer, 0, bytesRead);
+            }
+        }
+    }
+
+    private static PublicKey loadPublicKeyFromPEM(String pemPath) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(pemPath)));
+        String publicKeyPEM = pem.replace("-----BEGIN PUBLIC KEY-----", "")
+                                 .replace("-----END PUBLIC KEY-----", "")
+                                 .replaceAll("\\s", "");
+
+        byte[] decoded = Base64.getDecoder().decode(publicKeyPEM);
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePublic(spec);
+    }
+
+    private static byte[] encryptRSA(byte[] data, PublicKey publicKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        return cipher.doFinal(data);
+    }
+}
+
+
+
+
+
+
+
+
+
+
+decryption......
+
+
+
+
+
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.Base64;
+
+public class FileDecryptor {
+
+    public static void main(String[] args) throws Exception {
+        String dataFilePath = "/lotus/ds5/ETL/";
+        String encryptedFileName = "auto_papl.csv.enc";
+        String keyEncFile = dataFilePath + "auto_papl.csv.key.enc";
+        String privKeyPath = "/lotus/ds1/home/dsadm/ds_cert1/private.pem";
+
+        String baseFileName = encryptedFileName.replace(".enc", "");
+        String keyDecFile = dataFilePath + baseFileName + ".key.dec";
+        String decryptedFile = dataFilePath + baseFileName + ".dec";
+
+        // Step 1: Load private key
+        PrivateKey privateKey = loadPrivateKeyFromPEM(privKeyPath);
+
+        // Step 2: Decrypt AES key
+        byte[] encryptedKey = Files.readAllBytes(Paths.get(keyEncFile));
+        byte[] decryptedKey = decryptRSA(encryptedKey, privateKey);
+        Files.write(Paths.get(keyDecFile), decryptedKey);
+
+        // Step 3: Extract IV (first 16 bytes)
+        byte[] iv = new byte[16];
+        System.arraycopy(decryptedKey, 0, iv, 0, 16);
+
+        // Step 4: Decrypt the file
+        decryptFileAES(dataFilePath + encryptedFileName, decryptedFile, decryptedKey, iv);
+    }
+
+    private static void decryptFileAES(String encryptedFile, String outputFile, byte[] key, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(iv);
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec);
+
+        try (FileInputStream fis = new FileInputStream(encryptedFile);
+             CipherInputStream cis = new CipherInputStream(fis, cipher);
+             FileOutputStream fos = new FileOutputStream(outputFile)) {
+
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = cis.read(buffer)) != -1) {
+                fos.write(buffer, 0, bytesRead);
+            }
+        }
+    }
+
+    private static PrivateKey loadPrivateKeyFromPEM(String pemPath) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(pemPath)));
+        String privateKeyPEM = pem.replace("-----BEGIN PRIVATE KEY-----", "")
+                                  .replace("-----END PRIVATE KEY-----", "")
+                                  .replaceAll("\\s", "");
+
+        byte[] decoded = Base64.getDecoder().decode(privateKeyPEM);
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decoded);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        return kf.generatePrivate(keySpec);
+    }
+
+    private static byte[] decryptRSA(byte[] encryptedData, PrivateKey privateKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.DECRYPT_MODE, privateKey);
+        return cipher.doFinal(encryptedData);
+    }
+}
+
