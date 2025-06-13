@@ -160,3 +160,95 @@ public class FileDecryptor {
     }
 }
 
+
+
+
+enhance........
+
+
+
+
+import javax.crypto.Cipher;
+import javax.crypto.CipherOutputStream;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.*;
+import java.security.*;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
+import java.util.Base64;
+
+public class PlainJavaFileEncryptor {
+
+    public static void main(String[] args) {
+        try {
+            // === INPUTS ===
+            String inputFilePath = "/path/to/your/input/file.csv";  // Replace with actual path
+            String publicKeyPath = "/path/to/public.pem";           // Replace with actual path
+            String outputDir = "/path/to/output/";                  // Folder to store output files
+
+            // === FILENAMES ===
+            String baseName = new File(inputFilePath).getName();
+            String encryptedFile = outputDir + baseName + ".enc";
+            String encryptedKeyFile = outputDir + baseName + ".key.enc";
+
+            // === STEP 1: Generate AES-256 Key ===
+            byte[] aesKey = new byte[32];
+            SecureRandom random = new SecureRandom();
+            random.nextBytes(aesKey);
+
+            // === STEP 2: Extract IV from first 16 bytes ===
+            byte[] iv = Arrays.copyOfRange(aesKey, 0, 16);
+
+            // === STEP 3: Encrypt the file ===
+            encryptFile(inputFilePath, encryptedFile, aesKey, iv);
+
+            // === STEP 4: Encrypt AES key with public key ===
+            PublicKey publicKey = loadPublicKeyFromPEM(publicKeyPath);
+            byte[] encryptedKey = encryptAESKeyWithRSA(aesKey, publicKey);
+            Files.write(Paths.get(encryptedKeyFile), encryptedKey);
+
+            System.out.println("✅ File encrypted: " + encryptedFile);
+            System.out.println("🔑 Key encrypted: " + encryptedKeyFile);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void encryptFile(String inputPath, String outputPath, byte[] aesKey, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
+        IvParameterSpec ivSpec = new IvParameterSpec(iv);
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec);
+
+        try (FileInputStream fis = new FileInputStream(inputPath);
+             FileOutputStream fos = new FileOutputStream(outputPath);
+             CipherOutputStream cos = new CipherOutputStream(fos, cipher)) {
+
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                cos.write(buffer, 0, bytesRead);
+            }
+        }
+    }
+
+    private static PublicKey loadPublicKeyFromPEM(String pemFilePath) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(pemFilePath)));
+        String cleanPem = pem
+                .replace("-----BEGIN PUBLIC KEY-----", "")
+                .replace("-----END PUBLIC KEY-----", "")
+                .replaceAll("\\s", "");
+        byte[] decoded = Base64.getDecoder().decode(cleanPem);
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
+        return KeyFactory.getInstance("RSA").generatePublic(spec);
+    }
+
+    private static byte[] encryptAESKeyWithRSA(byte[] aesKey, PublicKey publicKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        return cipher.doFinal(aesKey);
+    }
+}
+
