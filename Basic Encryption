@@ -1,66 +1,83 @@
-import javax.crypto.Cipher;
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
+package com.ibm.sbi.lotus.cloudant.loginandreg.core;
+
+import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+
+import com.ibm.ISecurityUtilityImpl.KeyFile;
+
 import java.io.*;
 import java.nio.file.*;
 import java.security.*;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 import java.util.Base64;
 
-public class FileEncryptor {
+public class DynamicFileEncryption {
 
     public static void main(String[] args) throws Exception {
-        String pubCertPath = "/lotus/ds1/home/dsadm/ds_cert1/public.pem";
-        String filePath = "/lotus/ds5/ETL";
-        String dataFile = "auto_pap1.csv";
+        // Get the first .csv file from Downloads
+        File inputFile = getFirstCsvFromDownloads();
+        System.out.println("Input file: " + inputFile.getAbsolutePath());
 
-        Path keyFilePath = Paths.get(filePath, dataFile + ".key");
-        Path ivFilePath = Paths.get(filePath, dataFile + ".iv");
-        Path inputFile = Paths.get(filePath, dataFile);
-        Path encryptedFile = Paths.get(filePath, dataFile + ".enc");
+        String publicKeyPath = System.getProperty("user.home") + "/Downloads/public.pem";
+        File publicKeyFile = new File(publicKeyPath);
 
-        // 1. Generate AES key and IV
-        SecretKey aesKey = generateAESKey(256);
-        byte[] iv = generateIV(16);
+        if (!publicKeyFile.exists()) {
+            throw new FileNotFoundException("Public key not found at: " + publicKeyPath);
+        }
 
-        Files.write(keyFilePath, aesKey.getEncoded());
-        Files.write(ivFilePath, iv);
+        PublicKey publicKey = loadRSAPublicKey(publicKeyFile.getAbsolutePath());
 
-        // 2. Encrypt the data file using AES
-        encryptFileWithAES(inputFile.toFile(), encryptedFile.toFile(), aesKey.getEncoded(), iv);
+        // Output encrypted file path
+        File encryptedFile = new File(inputFile.getAbsolutePath() + ".enc");
 
-        // 3. Encrypt key and IV using RSA public key
-        PublicKey publicKey = loadRSAPublicKey(pubCertPath);
+        // Generate AES key and IV
+        SecretKey aesSecretKey = generateaesSecretKey(256);
+        // iv = aes half
+        byte[] aesKey = aesSecretKey.getEncoded();
+        byte[] iv = Arrays.copyOfRange(aesKey, 0, aesKey.length/2);
+		
+        //byte[] iv = generateIV(16);
 
-        byte[] encryptedKey = rsaEncrypt(publicKey, aesKey.getEncoded());
+		
+		  // Write raw key and IV to disk (optional - for debug) 
+        Path keyFilePath = Paths.get(inputFile.getAbsolutePath() + ".key"); 
+		  Path ivFilePath = Paths.get(inputFile.getAbsolutePath() + ".iv"); 
+		  Files.write(keyFilePath, aesSecretKey.getEncoded()); 
+		  //Files.write(ivFilePath, iv);
+		 
+
+        // Encrypt file with AES
+        encryptFileWithAES(inputFile, encryptedFile, aesSecretKey.getEncoded(), iv);
+        System.out.println("AES Encrypted file: " + encryptedFile);
+
+        // Encrypt AES key and IV with RSA public key
+        byte[] encryptedKey = rsaEncrypt(publicKey, aesSecretKey.getEncoded());
         byte[] encryptedIV = rsaEncrypt(publicKey, iv);
 
-        Files.write(Paths.get(filePath, keyFilePath.getFileName() + ".enc"), encryptedKey);
-        Files.write(Paths.get(filePath, ivFilePath.getFileName() + ".enc"), encryptedIV);
+        Files.write(Paths.get(inputFile.getAbsolutePath() + ".key.enc"), encryptedKey);
+        Files.write(Paths.get(inputFile.getAbsolutePath() + ".iv.enc"), encryptedIV);
 
         System.out.println("Encryption complete.");
     }
 
-    public static SecretKey generateAESKey(int bits) throws Exception {
-        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
-        keyGen.init(bits);
-        return keyGen.generateKey();
-    }
-
-    public static byte[] generateIV(int size) {
-        byte[] iv = new byte[size];
-        new SecureRandom().nextBytes(iv);
-        return iv;
+    public static File getFirstCsvFromDownloads() throws Exception {
+        File downloads = new File(System.getProperty("user.home") + "/Downloads");
+        File[] csvFiles = downloads.listFiles((dir, name) -> name.toLowerCase().endsWith(".csv"));
+        if (csvFiles == null || csvFiles.length == 0) {
+            throw new FileNotFoundException("No .csv files found in Downloads folder");
+        }
+        return csvFiles[0];
     }
 
     public static void encryptFileWithAES(File inputFile, File outputFile, byte[] key, byte[] iv) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-        SecretKeySpec secretKeySpec = new SecretKeySpec(key, "AES");
+        SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
-        cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, ivSpec);
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec);
 
         try (FileInputStream fis = new FileInputStream(inputFile);
              CipherOutputStream cos = new CipherOutputStream(new FileOutputStream(outputFile), cipher)) {
@@ -72,17 +89,31 @@ public class FileEncryptor {
         }
     }
 
-    public static PublicKey loadRSAPublicKey(String filename) throws Exception {
-        CertificateFactory cf = CertificateFactory.getInstance("X.509");
-        try (FileInputStream fis = new FileInputStream(filename)) {
-            X509Certificate cert = (X509Certificate) cf.generateCertificate(fis);
-            return cert.getPublicKey();
-        }
-    }
-
     public static byte[] rsaEncrypt(PublicKey publicKey, byte[] data) throws Exception {
-        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding"); // OpenSSL default
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
         cipher.init(Cipher.ENCRYPT_MODE, publicKey);
         return cipher.doFinal(data);
     }
+
+    public static <x509EncodedKeySpec> PublicKey loadRSAPublicKey(String filename) throws Exception {
+    	String pem = new String(Files.readAllBytes(Paths.get(filename)));
+    	pem = pem.replace("-----BEGIN PUBLIC KEY-----","").replace("-----END PUBLIC KEY-----", "").replaceAll("\\s+", "");
+        
+    	byte[] decoded = Base64.getDecoder().decode(pem);
+    	X509EncodedKeySpec spec = new X509EncodedKeySpec(decoded);
+    	KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+    	return keyFactory.generatePublic(spec);
+    	
+    }
+
+    public static SecretKey generateaesSecretKey(int bits) throws NoSuchAlgorithmException {
+        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+        keyGen.init(bits);
+        return keyGen.generateKey();
+    }
+
+	/*
+	 * public static byte[] generateIV(int length) { byte[] iv = new byte[length];
+	 * new SecureRandom().nextBytes(iv); return iv; }
+	 */
 }
