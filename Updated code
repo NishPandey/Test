@@ -1,0 +1,94 @@
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.UUID;
+
+public class AesCryptoTool {
+
+    private static final String AES_ALGO = "AES/CBC/PKCS5Padding";
+    private static final int AES_KEY_SIZE = 32; // 256 bits
+    private static final int IV_SIZE = 16; // 128 bits
+
+    public static void main(String[] args) {
+        if (args.length < 3) {
+            System.err.println("Usage: java -jar AesCryptoTool.jar <E|D> <inputFilePath> <outputFilePath>");
+            return;
+        }
+
+        String mode = args[0];
+        String inputPath = args[1];
+        String outputPath = args[2];
+
+        try {
+            // Generate AES Key (256-bit) using UUID + Base64
+            String aesKeyBase64 = generateAesKey();
+            byte[] aesKey = Base64.getDecoder().decode(aesKeyBase64);
+            byte[] iv = generateIvFromKey(aesKey);
+
+            System.out.println("AES Key (Base64): " + aesKeyBase64);
+            System.out.println("IV (Base64): " + Base64.getEncoder().encodeToString(iv));
+
+            if (mode.equalsIgnoreCase("E")) {
+                encryptFile(inputPath, outputPath, aesKey, iv);
+                System.out.println("✅ Encryption complete");
+            } else if (mode.equalsIgnoreCase("D")) {
+                decryptFile(inputPath, outputPath, aesKey, iv);
+                System.out.println("✅ Decryption complete");
+            } else {
+                System.err.println("Invalid mode. Use E for encryption or D for decryption.");
+            }
+
+        } catch (Exception e) {
+            System.err.println("❌ Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public static String generateAesKey() {
+        // Generate 256-bit AES key by combining two UUIDs and taking the first 32 bytes
+        String raw = UUID.randomUUID().toString().replace("-", "") +
+                     UUID.randomUUID().toString().replace("-", "");
+        byte[] keyBytes = raw.substring(0, 32).getBytes(); // 32 bytes = 256 bits
+        return Base64.getEncoder().encodeToString(keyBytes);
+    }
+
+    public static byte[] generateIvFromKey(byte[] aesKey) {
+        byte[] iv = new byte[IV_SIZE];
+        System.arraycopy(aesKey, 0, iv, 0, IV_SIZE);
+        return iv;
+    }
+
+    public static void encryptFile(String inputPath, String outputPath, byte[] aesKey, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance(AES_ALGO);
+        SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec, new IvParameterSpec(iv));
+
+        processFile(cipher, inputPath, outputPath);
+    }
+
+    public static void decryptFile(String inputPath, String outputPath, byte[] aesKey, byte[] iv) throws Exception {
+        Cipher cipher = Cipher.getInstance(AES_ALGO);
+        SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, new IvParameterSpec(iv));
+
+        processFile(cipher, inputPath, outputPath);
+    }
+
+    private static void processFile(Cipher cipher, String inputPath, String outputPath) throws IOException {
+        try (FileInputStream fis = new FileInputStream(inputPath);
+             CipherInputStream cis = new CipherInputStream(fis, cipher);
+             FileOutputStream fos = new FileOutputStream(outputPath)) {
+
+            byte[] buffer = new byte[4096];
+            int len;
+            while ((len = cis.read(buffer)) != -1) {
+                fos.write(buffer, 0, len);
+            }
+        }
+    }
+}
