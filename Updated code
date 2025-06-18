@@ -1,56 +1,98 @@
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
+
+import javax.crypto.Cipher; 
+import javax.crypto.CipherInputStream; 
+import javax.crypto.CipherOutputStream; 
+import javax.crypto.KeyGenerator; 
+import javax.crypto.spec.IvParameterSpec; 
+import javax.crypto.spec.SecretKeySpec; 
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.security.SecureRandom;
-import java.util.Base64;
-import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*; 
+import java.security.*; 
+import java.security.spec.*; 
+import java.util.*;
 
-public class AesCryptoTool {
+public class AesRsaCryptoTool {
 
-    private static final String AES_ALGO = "AES/CBC/PKCS5Padding";
-    private static final int AES_KEY_SIZE = 32; // 256 bits
-    private static final int IV_SIZE = 16; // 128 bits
+	 private static final String AES_ALGO = "AES/CBC/PKCS5Padding";
+	 private static final int AES_KEY_SIZE = 32; // 256 bits
+	 private static final int IV_SIZE = 16; // 128 bits
+	    
+public static void main(String[] args) {
+	try {
+		if (args.length < 1) {
+            printUsage();
+            return;	
+	}
+		String operation = args[0].trim().toUpperCase();
+        Properties config = loadPropertiesFromClasspath();
 
-    public static void main(String[] args) {
-        if (args.length < 3) {
-            System.err.println("Usage: java -jar AesCryptoTool.jar <E|D> <inputFilePath> <outputFilePath>");
-            return;
-        }
+        switch (operation) {
+        case "E":
+            if (args.length != 2) {
+                System.err.println("X Invalid args for encryption");
+                		 printUsage();
+                         return;
+                     }
+                     encryptFlow(args[1], config);
+                     break;
 
-        String mode = args[0];
-        String inputPath = args[1];
-        String outputPath = args[2];
+                 case "D":
+                     if (args.length != 3) {
+                    	 System.err.println("X Invalid args for decryption."); 
+                    	 printUsage();
+                         return;
+                     }
+                     decryptFlow(args[1], args[2], config);
+                     break;
 
-        try {
-            // Generate AES Key (256-bit) using UUID + Base64
-            String aesKeyBase64 = generateAesKey();
-            byte[] aesKey = Base64.getDecoder().decode(aesKeyBase64);
-            byte[] iv = generateIvFromKey(aesKey);
+                 default:
+                     System.err.println("X Invalid operation. Use E or D.");
+                     printUsage();
+             }
+         } catch (Exception e) {
+             System.err.println("X Error: " + e.getMessage());
+             e.printStackTrace();
+         }
+     }
+private static void encryptFlow(String inputFilePath, Properties config) throws Exception {
+    String outputFilePath = inputFilePath + ".enc";
+    String keyEncPath = inputFilePath + ".key.enc";
 
-            System.out.println("AES Key (Base64): " + aesKeyBase64);
-            System.out.println("IV (Base64): " + Base64.getEncoder().encodeToString(iv));
+    String aesKeyBase64 = generateAesKey();
+    byte[] aesKey = Base64.getDecoder().decode(aesKeyBase64);
+    byte[] iv = generateIvFromKey(aesKey);
 
-            if (mode.equalsIgnoreCase("E")) {
-                encryptFile(inputPath, outputPath, aesKey, iv);
-                System.out.println("✅ Encryption complete");
-            } else if (mode.equalsIgnoreCase("D")) {
-                decryptFile(inputPath, outputPath, aesKey, iv);
-                System.out.println("✅ Decryption complete");
-            } else {
-                System.err.println("Invalid mode. Use E for encryption or D for decryption.");
-            }
+    encryptFile(inputFilePath, outputFilePath, aesKey, iv);
 
-        } catch (Exception e) {
-            System.err.println("❌ Error: " + e.getMessage());
-            e.printStackTrace();
-        }
+    PublicKey publicKey = loadPublicKey(config.getProperty("publicKeyPath"));
+    byte[] encryptedKey = encryptAESKeyWithRSA(aesKey, publicKey);
+    Files.write(Paths.get(keyEncPath), encryptedKey);
+
+    System.out.println(" File encrypted: " + outputFilePath);
+    System.out.println(" AES key encrypted to: " + keyEncPath);
+}
+    private static void decryptFlow(String encryptedFilePath, String encryptedKeyPath, Properties config) throws Exception {
+        String decryptedFilePath = encryptedFilePath.replace(".enc", ".dec");
+
+        byte[] encryptedKey = Files.readAllBytes(Paths.get(encryptedKeyPath));
+        PrivateKey privateKey = loadPrivateKey(config.getProperty("privateKeyPath"));
+        byte[] aesKey = decryptAESKeyWithRSA(encryptedKey, privateKey);
+        byte[] iv = Arrays.copyOfRange(aesKey, 0, 16);
+
+        decryptFile(encryptedFilePath, decryptedFilePath, aesKey, iv);
+
+        System.out.println(" File decrypted: " + decryptedFilePath);
+    }
+
+    private static void printUsage() {
+        System.out.println("Usage:");
+        System.out.println("  Encrypt: java -jar AesRsaCryptoTool.jar E <inputFile>");
+        System.out.println("  Decrypt: java -jar AesRsaCryptoTool.jar D <encryptedFile> <encryptedKeyFile>");
+        System.out.println("Note: config.properties should be in the resources folder.");
     }
 
     public static String generateAesKey() {
-        // Generate 256-bit AES key by combining two UUIDs and taking the first 32 bytes
         String raw = UUID.randomUUID().toString().replace("-", "") +
                      UUID.randomUUID().toString().replace("-", "");
         byte[] keyBytes = raw.substring(0, 32).getBytes(); // 32 bytes = 256 bits
@@ -62,24 +104,33 @@ public class AesCryptoTool {
         System.arraycopy(aesKey, 0, iv, 0, IV_SIZE);
         return iv;
     }
+    
+    private static void encryptFile(String inputPath, String outputPath, byte[] key, byte[] iv) throws Exception {
 
-    public static void encryptFile(String inputPath, String outputPath, byte[] aesKey, byte[] iv) throws Exception {
-        Cipher cipher = Cipher.getInstance(AES_ALGO);
-        SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
-        cipher.init(Cipher.ENCRYPT_MODE, keySpec, new IvParameterSpec(iv));
-
-        processFile(cipher, inputPath, outputPath);
+    	byte[] keyForCipher = Arrays.copyOfRange(key, 0, IV_SIZE);
+    	SecretKeySpec keySpec = new SecretKeySpec(keyForCipher, "AES");
+    	IvParameterSpec ivSpec = new IvParameterSpec(iv);
+    	Cipher cipher = Cipher.getInstance(AES_ALGO);
+    	cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec);
+    	try (FileInputStream fis = new FileInputStream(inputPath);
+              CipherOutputStream cos = new CipherOutputStream(new FileOutputStream(outputPath), cipher)) {
+ 
+             byte[] buffer = new byte[4096];
+             int len;
+             while ((len = fis.read(buffer)) != -1) {
+                 cos.write(buffer, 0, len);
+             }
+         }
+    	
     }
 
-    public static void decryptFile(String inputPath, String outputPath, byte[] aesKey, byte[] iv) throws Exception {
-        Cipher cipher = Cipher.getInstance(AES_ALGO);
-        SecretKeySpec keySpec = new SecretKeySpec(aesKey, "AES");
-        cipher.init(Cipher.DECRYPT_MODE, keySpec, new IvParameterSpec(iv));
+    private static void decryptFile(String inputPath, String outputPath, byte[] key, byte[] iv) throws Exception {
+    	byte[] keyForCipher = Arrays.copyOfRange(key, 0, IV_SIZE);
+    	SecretKeySpec keySpec = new SecretKeySpec(keyForCipher, "AES");
+    	IvParameterSpec ivSpec = new IvParameterSpec(iv);
+    	Cipher cipher = Cipher.getInstance(AES_ALGO);
+    	cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec);
 
-        processFile(cipher, inputPath, outputPath);
-    }
-
-    private static void processFile(Cipher cipher, String inputPath, String outputPath) throws IOException {
         try (FileInputStream fis = new FileInputStream(inputPath);
              CipherInputStream cis = new CipherInputStream(fis, cipher);
              FileOutputStream fos = new FileOutputStream(outputPath)) {
@@ -91,4 +142,46 @@ public class AesCryptoTool {
             }
         }
     }
+
+    private static byte[] encryptAESKeyWithRSA(byte[] aesKey, PublicKey publicKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+        return cipher.doFinal(aesKey);
+    }
+
+    private static byte[] decryptAESKeyWithRSA(byte[] encryptedKey, PrivateKey privateKey) throws Exception {
+        Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+        cipher.init(Cipher.DECRYPT_MODE, privateKey);
+        return cipher.doFinal(encryptedKey);
+    }
+
+    private static PublicKey loadPublicKey(String path) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+        String clean = pem.replaceAll("-----BEGIN PUBLIC KEY-----|-----END PUBLIC KEY-----|\\s", "");
+        byte[] decoded = Base64.getDecoder().decode(clean);
+        return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(decoded));
+    }
+
+    private static PrivateKey loadPrivateKey(String path) throws Exception {
+        String pem = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+        String clean = pem.replaceAll("-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\\s", "");
+        byte[] decoded = Base64.getDecoder().decode(clean);
+        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(decoded));
+    }
+
+    private static Properties loadPropertiesFromClasspath() throws IOException {
+        Properties props = new Properties();
+        try (InputStream input = AesRsaCryptoTool.class.getClassLoader().getResourceAsStream("config.properties")) {
+            if (input != null) {
+            	props.load(input);
+            	return props; 
+            }
+        }
+       try(InputStream input = new FileInputStream("config.properties")){
+    	   props.load(input);
+    	   return props;
+       }
+    }
+
 }
+    
